@@ -1,0 +1,6 @@
+numpy
+scikit-learn
+pyzmq
+MetaTrader5==3.0.32 # Use the exact version for stability
+pandas
+TA-Lib
