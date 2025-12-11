@@ -40,7 +40,8 @@ The Execution and Analytical Layers communicate via **ZeroMQ (ZMQ)** for robust,
 3.  **Entry Logic Decoupling:** Trade entry signals are based on a **Static MACD** indicator to isolate the performance impact of the *adaptive risk management* layer (CPO).
 4.  **Exclusion of Fundamental Data:** ML model relies strictly on Technical/Complexity Features (Hurst Exponent, ATR, ADX).
 5.  **Simulated MLOps Orchestration (Constraint):** The weekly retraining schedule is executed by directly running the `retraining_script.py` via a **Streamlit front-end trigger** or local shell command, *simulating* a production cloud scheduler (e.g., Google Cloud Scheduler).
-6.  **MLOps Presentation (Addition):** Inclusion of a **Streamlit** dashboard to visualize GMM cluster properties, WFA time series, and comparative performance metrics for evidence generation.
+6.  **Data Ingestion (Frontend):** Historical Market Data (CSV) is uploaded via the **Streamlit Dashboard** to bypass OS-specific API limitations (Linux/WSL).
+7.  **MLOps Presentation (Addition):** Inclusion of a **Streamlit** dashboard to visualize GMM cluster properties, WFA time series, and comparative performance metrics for evidence generation.
 
 #### 3.2. Technical Stack
 
@@ -75,8 +76,8 @@ This cycle is primarily orchestrated by the `retraining_script.py`, with the **S
 
 | Step | Process | Responsibility |
 | :--- | :--- | :--- |
-| 1. Trigger | **Manual Trigger** (Button Click) | Streamlit Front-End |
-| 2. Data Pull | Acquire 180 days of new market data (simulating continuity). | `retraining_script.py` |
+| 1. Ingest | **File Upload:** User uploads `EURUSD_M15.csv` via Streamlit. | Streamlit Front-End |
+| 2. Trigger | **Manual Trigger** (Button Click) | Streamlit Front-End |
 | 3. Retrain/Segment | Execute GMM on new data, classify historical segments. | `retraining_script.py` (GMM) |
 | 4. CPO & WFA Loop | Iteratively run the Walk-Forward Optimization (IS/OOS) over the entire historical window to derive a new optimal $\mathbf{P}_i$ for each of the $k=4$ segments. | `retraining_script.py` (Optimization Subprocess) |
 | 5. Validation Capture | **Capture and Save**: WFA metrics (Sharpe/Recovery time series) and the final GMM Cluster Centroids. | `retraining_script.py` (Artifacts) |
