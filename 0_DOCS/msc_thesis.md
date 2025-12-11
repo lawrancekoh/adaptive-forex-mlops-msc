@@ -58,7 +58,7 @@ ACADEMIC YEAR
 
 [1.5.1 Single-Asset Focus (EURUSD)	9](#1.5.1-single-asset-focus-\(eurusd\))
 
-[1.5.2 Simulation-Based Validation	9](#1.5.2-simulation-based-validation)
+[1.5.2 Simulation-Based Validation	9](#heading=h.janr4ub7o37m)
 
 [1.5.3 Parameter Optimization Constraints	10](#1.5.3-parameter-optimization-constraints)
 
@@ -154,7 +154,7 @@ ACADEMIC YEAR
 
 [3.7.1 Local Containerization	28](#3.7.1-local-containerization)
 
-[3.7.2 Simulated Weekly Retraining	28](#3.7.2-simulated-weekly-retraining)
+[3.7.2 Simulated Weekly Retraining	28](#heading=h.uleblf3szp9r)
 
 [**4\. Experimental Results and Analysis	29**](#4.-experimental-results-and-analysis)
 
@@ -266,9 +266,11 @@ To ensure depth of analysis and methodological rigor within the constraints of t
 
 The research is exclusively focused on the EUR/USD currency pair. As the most liquid instrument in the global Forex market, it serves as the standard benchmark for algorithmic trading efficiency. Generalization of the adaptive framework to cross-rates or commodities (e.g., XAUUSD) is outside the scope of this study and suggested for future work.
 
-### 1.5.2 Simulation-Based Validation  {#1.5.2-simulation-based-validation}
+### 1.5.2 Simulation-Based Validation and Local MLOps Orchestration
 
-While the system architecture supports live deployment, the primary validation of the "Continuous Adaptation" hypothesis is conducted via Walk-Forward Analysis (WFA) on historical data (2020–2024). The "Weekly Re-training" mechanism is simulated in a backtesting environment to isolate the performance impact of the ML model from external latency or execution slippage factors inherent in live cloud deployment.
+While the system is architecturally designed for deployment on production-grade infrastructure (e.g., Google Cloud Run/Scheduler), the primary validation of the "Continuous Adaptation" hypothesis is conducted via Walk-Forward Analysis (WFA) on historical data (2020–2024).
+
+The Fixed Weekly Re-training mechanism will be orchestrated locally by manually executing the retraining\_script.py (or via a simple local scheduling tool like a cron job/Windows Task Scheduler). This approach serves a critical methodological function: It isolates the performance impact of the ML model and CPO logic from external factors inherent in live cloud deployment, such as network latency, execution slippage, or unpredictable cloud scheduling delays. The performance metrics derived will therefore be a pure measure of the adaptive algorithm's efficacy.
 
 ### 1.5.3 Parameter Optimization Constraints  {#1.5.3-parameter-optimization-constraints}
 
@@ -649,9 +651,19 @@ To validate the continuous adaptation hypothesis while adhering to the scope of 
 
 The Python application, including the ML model and ZMQ server, was containerized using Docker. The environment was defined by a Dockerfile utilizing a lightweight Python 3.9 image, ensuring dependency isolation for libraries such as scikit-learn and talib.
 
-### 3.7.2 Simulated Weekly Retraining  {#3.7.2-simulated-weekly-retraining}
+### 3.7.2 Simulated Weekly Retraining
 
-In a production environment, this system is designed to leverage Google Cloud Scheduler to trigger weekly updates. For this simulation, the retraining cycle was executed via a rolling-window backtest script. This script iteratively retrained the GMM on a moving window of historical data (simulating the 'Saturday' cron job) and generated updated model artifacts (model.pkl) for the subsequent out-of-sample trading week.
+In the production architecture (as described in Section 2.4), a scheduled service is responsible for model updates. For this simulation-based study, this function is encapsulated within the retraining\_script.py.
+
+This script operates as the local orchestrator for the Continuous Training (CT) pipeline. Instead of being triggered by a cloud service, it is executed manually or via a basic local operating system scheduler. Its operation, however, mirrors the production intent:
+
+* Iterative WFA Loop: The script initiates a loop that iterates through the historical testing period (2020-2024), advancing the lookback and validation windows (e.g., 100 days IS, 20 days OOS) sequentially.
+
+* Model Persistency Simulation: At each iteration, the script performs the full Feature Calculation, GMM Model Fitting, and CPO derivation. The resulting model artifact (gmm\_model.pkl) and parameter map (trade\_params.json) are temporarily saved to disk, effectively simulating the behavior of a cloud storage service (e.g., GCS) persisting the artifact.
+
+* Validation Data Capture: Critically, for every WFA step, the script captures and persists the Out-of-Sample (OOS) performance metrics (Sharpe Ratio, Recovery Factor, Trade Count, etc.). This collected data forms the source for the final analysis and the Streamlit Presentation Layer (Chapter 4).
+
+This simulated environment ensures that the core hypothesis—that continuous, regime-aware adaptation provides superior, robust performance—can be quantitatively validated with maximum control and reproducibility.
 
 # 
 
