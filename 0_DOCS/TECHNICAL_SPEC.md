@@ -28,6 +28,16 @@ The internal DataFrame must strictly adhere to this schema after preprocessing:
 | `hurst` | `float64` | Rolling Hurst Exponent (100). |
 | `regime_cluster`| `int32` | GMM Cluster Label (0-3). |
 
+### 1.3. Data Loader Component (`src/data_loader.py`)
+Responsible for parsing the uploaded CSV and normalizing it for the ML pipeline.
+
+**Responsibilities:**
+1.  **Ingestion:** Accept file object (from Streamlit) or path (from CLI).
+2.  **Parsing:** `pd.read_csv`, handling MT5's specific separators (often `\t` or `;`) and encoding (`utf-16` is common for MT5 exports).
+3.  **Normalization:** Rename columns to lowercase standard: `['time', 'open', 'high', 'low', 'close', 'tick_volume', 'vol', 'spread']`.
+4.  **Validation:** Ensure no missing values; fill gaps or drop rows.
+
+
 ### 1.2. Feature Matrix ($X$)
 The input vector for the GMM Model (`model.predict(X)`).
 *   **Columns:** `['hurst', 'volatility_atr', 'trend_adx']` (Order is critical).
