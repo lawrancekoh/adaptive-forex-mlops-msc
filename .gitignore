@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Environment
+.vscode/
+
+# MQL5
+*.ex5
+*.log
+Tester/
+
+# ML Artifacts
+3_ML_ARTIFACTS/
