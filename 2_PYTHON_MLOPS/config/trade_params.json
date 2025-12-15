@@ -1,0 +1,22 @@
+{
+  "0": {
+    "regime_label": "Ranging (Safe)",
+    "distance_multiplier": 1.2,
+    "lot_multiplier": 1.5
+  },
+  "1": {
+    "regime_label": "Strong Trend (Risk)",
+    "distance_multiplier": 2.0,
+    "lot_multiplier": 1.1
+  },
+  "2": {
+    "regime_label": "High Volatility (ATR)",
+    "distance_multiplier": 2.5,
+    "lot_multiplier": 1.2
+  },
+  "3": {
+    "regime_label": "Low Volatility / Trending",
+    "distance_multiplier": 1.5,
+    "lot_multiplier": 1.3
+  }
+}

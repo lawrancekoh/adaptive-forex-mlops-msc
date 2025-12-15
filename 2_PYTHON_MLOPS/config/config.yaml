@@ -1,0 +1,13 @@
+# Machine Learning / Regime Model Configuration
+GMM_N_COMPONENTS: 4
+CLUSTER_LOOKBACK_PERIOD: 100 # for Hurst/Feature calculation
+
+# Data Acquisition
+MT5_SYMBOL: "EURUSD"
+MT5_TIMEFRAME: "M15"
+MT5_ROLLING_WINDOW_DAYS: 180 # For weekly retraining
+
+# MLOps / IPC Configuration
+ZMQ_PORT: "5555"
+ZMQ_HOST: "tcp://*:5555"
+MODEL_ARTIFACT_PATH: "../3_ML_ARTIFACTS/gmm_model.pkl"

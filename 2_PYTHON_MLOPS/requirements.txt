@@ -1,6 +1,11 @@
 numpy
+pandas
 scikit-learn
 pyzmq
-MetaTrader5==3.0.32 # Use the exact version for stability
-pandas
-TA-Lib
+# MetaTrader5==3.0.32
+# TA-Lib
+hurst
+pyyaml
+joblib
+streamlit
+plotly
