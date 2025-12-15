@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
+from datetime import timedelta
 
 # Import local modules
 # Assuming src is in python path or relative import
@@ -22,6 +23,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, '../config/config.yaml')
 ARTIFACTS_DIR = os.path.join(BASE_DIR, '../../3_ML_ARTIFACTS')
 TRADE_PARAMS_PATH = os.path.join(BASE_DIR, '../config/trade_params.json')
+WFA_METRICS_PATH = os.path.join(ARTIFACTS_DIR, 'wfa_metrics.json')
 
 def train_gmm(df, n_components=4):
     """
@@ -108,6 +110,165 @@ def derive_cpo_params(gmm, scaler, feature_cols=['hurst', 'volatility_atr', 'tre
         
     return cpo_map, centroids
 
+
+def run_wfa_full(df_features, lookback_months=6, step_weeks=1, n_components=4):
+    """
+    Runs the full Walk-Forward Analysis simulation.
+    
+    Args:
+        df_features (pd.DataFrame): Feature matrix with datetime index.
+        lookback_months (int): IS window size in months.
+        step_weeks (int): OOS window size / step in weeks.
+        n_components (int): Number of GMM clusters.
+        
+    Returns:
+        dict: WFA metrics and per-period results.
+    """
+    results = []
+    
+    # Define time deltas
+    lookback = pd.DateOffset(months=lookback_months)
+    step = pd.DateOffset(weeks=step_weeks)
+    
+    # Get date range
+    start_date = df_features.index.min()
+    end_date = df_features.index.max()
+    
+    # First IS window starts at beginning, first OOS starts after lookback
+    current_oos_start = start_date + lookback
+    
+    iteration = 0
+    total_iterations = 0
+    
+    # Count total iterations for progress
+    temp_date = current_oos_start
+    while temp_date + step <= end_date:
+        total_iterations += 1
+        temp_date += step
+    
+    print(f"Starting WFA Simulation:")
+    print(f"  Data Range: {start_date.date()} to {end_date.date()}")
+    print(f"  IS Window: {lookback_months} months, OOS Step: {step_weeks} week(s)")
+    print(f"  Total Iterations: {total_iterations}")
+    print("-" * 60)
+    
+    while current_oos_start + step <= end_date:
+        iteration += 1
+        
+        # Define IS and OOS periods
+        is_start = current_oos_start - lookback
+        is_end = current_oos_start
+        oos_start = current_oos_start
+        oos_end = current_oos_start + step
+        
+        # Slice data
+        is_data = df_features[(df_features.index >= is_start) & (df_features.index < is_end)]
+        oos_data = df_features[(df_features.index >= oos_start) & (df_features.index < oos_end)]
+        
+        # Skip if insufficient data
+        if len(is_data) < 100 or len(oos_data) < 10:
+            print(f"  [{iteration}/{total_iterations}] Skipping - insufficient data (IS: {len(is_data)}, OOS: {len(oos_data)})")
+            current_oos_start += step
+            continue
+        
+        try:
+            # Train GMM on IS data
+            gmm, scaler = train_gmm(is_data, n_components=n_components)
+            
+            # Predict on OOS data
+            X_oos = oos_data[['hurst', 'volatility_atr', 'trend_adx']].values
+            X_oos_scaled = scaler.transform(X_oos)
+            oos_regimes = gmm.predict(X_oos_scaled)
+            
+            # Also predict on IS for comparison (training fit)
+            X_is = is_data[['hurst', 'volatility_atr', 'trend_adx']].values
+            X_is_scaled = scaler.transform(X_is)
+            is_regimes = gmm.predict(X_is_scaled)
+            
+            # Calculate metrics
+            oos_regime_counts = np.bincount(oos_regimes, minlength=n_components)
+            is_regime_counts = np.bincount(is_regimes, minlength=n_components)
+            
+            # Regime stability: count transitions
+            oos_transitions = np.sum(np.diff(oos_regimes) != 0)
+            stability_ratio = 1.0 - (oos_transitions / max(1, len(oos_regimes) - 1))
+            
+            # Dominant regime
+            dominant_regime = int(np.argmax(oos_regime_counts))
+            
+            # Average log-likelihood (model fit quality)
+            oos_log_likelihood = gmm.score(X_oos_scaled)
+            is_log_likelihood = gmm.score(X_is_scaled)
+            
+            # Get CPO params for this iteration
+            cpo_map, _ = derive_cpo_params(gmm, scaler)
+            
+            period_result = {
+                'iteration': iteration,
+                'is_start': str(is_start.date()),
+                'is_end': str(is_end.date()),
+                'oos_start': str(oos_start.date()),
+                'oos_end': str(oos_end.date()),
+                'is_samples': len(is_data),
+                'oos_samples': len(oos_data),
+                'oos_regime_distribution': oos_regime_counts.tolist(),
+                'is_regime_distribution': is_regime_counts.tolist(),
+                'dominant_regime': dominant_regime,
+                'dominant_regime_label': cpo_map[str(dominant_regime)]['regime_label'],
+                'oos_transitions': int(oos_transitions),
+                'stability_ratio': round(stability_ratio, 4),
+                'oos_log_likelihood': round(oos_log_likelihood, 4),
+                'is_log_likelihood': round(is_log_likelihood, 4),
+                'generalization_gap': round(is_log_likelihood - oos_log_likelihood, 4)
+            }
+            
+            results.append(period_result)
+            
+            print(f"  [{iteration}/{total_iterations}] OOS: {oos_start.date()} | "
+                  f"Dominant: R{dominant_regime} ({cpo_map[str(dominant_regime)]['regime_label'][:15]:15s}) | "
+                  f"Stability: {stability_ratio:.2f}")
+            
+        except Exception as e:
+            print(f"  [{iteration}/{total_iterations}] Error: {e}")
+            
+        # Roll forward
+        current_oos_start += step
+    
+    print("-" * 60)
+    print(f"WFA Complete: {len(results)} valid iterations")
+    
+    # Aggregate statistics
+    if results:
+        all_dominant = [r['dominant_regime'] for r in results]
+        all_stability = [r['stability_ratio'] for r in results]
+        all_gap = [r['generalization_gap'] for r in results]
+        
+        aggregate = {
+            'total_iterations': len(results),
+            'regime_frequency': {
+                str(i): all_dominant.count(i) for i in range(n_components)
+            },
+            'avg_stability_ratio': round(np.mean(all_stability), 4),
+            'std_stability_ratio': round(np.std(all_stability), 4),
+            'avg_generalization_gap': round(np.mean(all_gap), 4),
+            'std_generalization_gap': round(np.std(all_gap), 4)
+        }
+    else:
+        aggregate = {}
+    
+    return {
+        'wfa_params': {
+            'lookback_months': lookback_months,
+            'step_weeks': step_weeks,
+            'n_components': n_components,
+            'data_start': str(start_date.date()),
+            'data_end': str(end_date.date())
+        },
+        'aggregate': aggregate,
+        'periods': results
+    }
+
+
 def run_wfa_simulation(data_source=None, mode='single_train'):
     """
     Orchestrates the training/simulation process.
@@ -168,8 +329,45 @@ def run_wfa_simulation(data_source=None, mode='single_train'):
         result['trade_params'] = trade_params
 
     elif mode == 'full':
-        # Placeholder for full WFA loop logic
-        result['message'] = "Full WFA Simulation not fully implemented yet."
+        print("Running Full Walk-Forward Analysis...")
+        
+        try:
+            wfa_results = run_wfa_full(
+                df_features, 
+                lookback_months=6, 
+                step_weeks=1, 
+                n_components=4
+            )
+            
+            # Save WFA metrics
+            if not os.path.exists(ARTIFACTS_DIR):
+                os.makedirs(ARTIFACTS_DIR)
+                
+            with open(WFA_METRICS_PATH, 'w') as f:
+                json.dump(wfa_results, f, indent=2)
+                
+            result['message'] = f"WFA Complete: {wfa_results['aggregate'].get('total_iterations', 0)} iterations."
+            result['wfa_metrics_path'] = WFA_METRICS_PATH
+            result['aggregate'] = wfa_results['aggregate']
+            
+            # Also train final model on all data for deployment
+            print("\nTraining final model on full dataset...")
+            model, scaler = train_gmm(df_features, n_components=4)
+            trade_params, centroids = derive_cpo_params(model, scaler)
+            
+            joblib.dump(model, os.path.join(ARTIFACTS_DIR, 'gmm_model.pkl'))
+            joblib.dump(scaler, os.path.join(ARTIFACTS_DIR, 'scaler.pkl'))
+            
+            with open(TRADE_PARAMS_PATH, 'w') as f:
+                json.dump(trade_params, f, indent=4)
+                
+            result['centroids'] = centroids
+            result['trade_params'] = trade_params
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"status": "error", "message": f"WFA Simulation failed: {e}"}
         
     return result
 
@@ -177,3 +375,4 @@ if __name__ == "__main__":
     # Test
     res = run_wfa_simulation()
     print(json.dumps(res, indent=2, default=str))
+
