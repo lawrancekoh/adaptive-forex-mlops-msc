@@ -1,22 +1,50 @@
 {
-  "0": {
-    "regime_label": "Ranging (Safe)",
-    "distance_multiplier": 1.2,
-    "lot_multiplier": 1.5
-  },
-  "1": {
-    "regime_label": "Strong Trend (Risk)",
-    "distance_multiplier": 2.0,
-    "lot_multiplier": 1.1
-  },
-  "2": {
-    "regime_label": "High Volatility (ATR)",
-    "distance_multiplier": 2.5,
-    "lot_multiplier": 1.2
-  },
-  "3": {
-    "regime_label": "Low Volatility / Trending",
-    "distance_multiplier": 1.5,
-    "lot_multiplier": 1.3
-  }
+    "3": {
+        "regime_label": "Ranging (Safe)",
+        "distance_multiplier": 1.2,
+        "lot_multiplier": 1.5,
+        "rationale": "Mean Reverting (Low Hurst) (H=0.90, ADX=19.0)",
+        "feature_means": {
+            "cluster_id": 3,
+            "hurst": 0.9005851526101236,
+            "atr": 0.0005544841666117372,
+            "adx": 18.996450258083158
+        }
+    },
+    "2": {
+        "regime_label": "Choppy / Weak Trend",
+        "distance_multiplier": 1.5,
+        "lot_multiplier": 1.3,
+        "rationale": "Moderate Hurst (H=0.94, ADX=31.3)",
+        "feature_means": {
+            "cluster_id": 2,
+            "hurst": 0.9387134367362499,
+            "atr": 0.0009410070208161171,
+            "adx": 31.344796235155023
+        }
+    },
+    "0": {
+        "regime_label": "Trending",
+        "distance_multiplier": 2.0,
+        "lot_multiplier": 1.2,
+        "rationale": "High Hurst (H=0.98, ADX=22.9)",
+        "feature_means": {
+            "cluster_id": 0,
+            "hurst": 0.9786676172295222,
+            "atr": 0.0005178880500039788,
+            "adx": 22.93819737403329
+        }
+    },
+    "1": {
+        "regime_label": "Strong Trend / Breakout",
+        "distance_multiplier": 2.5,
+        "lot_multiplier": 1.1,
+        "rationale": "Extreme Hurst (Persistence) (H=1.00, ADX=25.6)",
+        "feature_means": {
+            "cluster_id": 1,
+            "hurst": 0.9999998630985628,
+            "atr": 0.0006541045591656154,
+            "adx": 25.589868447735597
+        }
+    }
 }
