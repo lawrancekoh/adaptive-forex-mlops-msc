@@ -371,8 +371,132 @@ def run_wfa_simulation(data_source=None, mode='single_train'):
         
     return result
 
+
+def generate_backtest_cheatsheet(data_source=None):
+    """
+    Generate a CSV cheatsheet for Strategy Tester backtesting.
+    
+    This function:
+    1. Loads the full historical dataset
+    2. Applies the trained GMM model to predict regime for every bar
+    3. Maps regimes to CPO parameters using trade_params.json
+    4. Saves as CSV: 3_ML_ARTIFACTS/backtest_cheatsheet.csv
+    
+    CSV Format: Time (epoch),RegimeID,DistMult,LotMult
+    
+    Args:
+        data_source: File path to OHLC data, or None to use default.
+        
+    Returns:
+        dict: Status and path to generated CSV.
+    """
+    print("=" * 60)
+    print("Generating Backtest Cheatsheet")
+    print("=" * 60)
+    
+    # 1. Load Data
+    if data_source:
+        df = load_data(data_source)
+    else:
+        # Try default local file
+        test_path = os.path.join(BASE_DIR, '../data/EURUSD_M15.csv')
+        if os.path.exists(test_path):
+            df = load_data(test_path)
+        else:
+            return {"status": "error", "message": "No data provided and no local file found."}
+    
+    if df.empty:
+        return {"status": "error", "message": "Loaded dataframe is empty."}
+    
+    print(f"  Loaded {len(df)} rows of price data")
+    print(f"  Date range: {df.index.min()} to {df.index.max()}")
+    
+    # 2. Build Feature Matrix
+    try:
+        df_features = build_feature_matrix(df)
+        if df_features.empty:
+            return {"status": "error", "message": "Feature matrix is empty (not enough data?)."}
+        print(f"  Built feature matrix: {len(df_features)} rows")
+    except Exception as e:
+        return {"status": "error", "message": f"Feature Engineering failed: {e}"}
+    
+    # 3. Load trained model and scaler
+    model_path = os.path.join(ARTIFACTS_DIR, 'gmm_model.pkl')
+    scaler_path = os.path.join(ARTIFACTS_DIR, 'scaler.pkl')
+    
+    if not os.path.exists(model_path) or not os.path.exists(scaler_path):
+        return {"status": "error", "message": "Model or scaler not found. Run training first."}
+    
+    gmm = joblib.load(model_path)
+    scaler = joblib.load(scaler_path)
+    print(f"  Loaded GMM model and scaler")
+    
+    # 4. Load trade params
+    if not os.path.exists(TRADE_PARAMS_PATH):
+        return {"status": "error", "message": "trade_params.json not found. Run training first."}
+    
+    with open(TRADE_PARAMS_PATH, 'r') as f:
+        trade_params = json.load(f)
+    print(f"  Loaded trade params: {len(trade_params)} regimes")
+    
+    # 5. Predict regime for every bar
+    X = df_features[['hurst', 'volatility_atr', 'trend_adx']].values
+    X_scaled = scaler.transform(X)
+    regimes = gmm.predict(X_scaled)
+    
+    print(f"  Predicted regimes for {len(regimes)} bars")
+    print(f"  Regime distribution: {np.bincount(regimes, minlength=4)}")
+    
+    # 6. Build output DataFrame
+    # Time as epoch seconds (for MQL5 datetime compatibility)
+    times = df_features.index.astype('int64') // 10**9  # Convert to Unix epoch
+    
+    dist_mults = []
+    lot_mults = []
+    for r in regimes:
+        params = trade_params.get(str(r), trade_params.get("0", {}))
+        dist_mults.append(params.get("distance_multiplier", 1.5))
+        lot_mults.append(params.get("lot_multiplier", 1.2))
+    
+    cheatsheet_df = pd.DataFrame({
+        'Time': times,
+        'RegimeID': regimes,
+        'DistMult': dist_mults,
+        'LotMult': lot_mults
+    })
+    
+    # Sort by time to ensure proper binary search in MQL5
+    cheatsheet_df = cheatsheet_df.sort_values('Time').reset_index(drop=True)
+    
+    # 7. Save CSV
+    if not os.path.exists(ARTIFACTS_DIR):
+        os.makedirs(ARTIFACTS_DIR)
+    
+    csv_path = os.path.join(ARTIFACTS_DIR, 'backtest_cheatsheet.csv')
+    cheatsheet_df.to_csv(csv_path, index=False)
+    
+    print(f"  ✅ Saved cheatsheet to: {csv_path}")
+    print(f"  Total rows: {len(cheatsheet_df)}")
+    print(f"  Time range: {cheatsheet_df['Time'].min()} to {cheatsheet_df['Time'].max()}")
+    print("=" * 60)
+    
+    return {
+        "status": "success",
+        "path": csv_path,
+        "rows": len(cheatsheet_df),
+        "time_range": [int(cheatsheet_df['Time'].min()), int(cheatsheet_df['Time'].max())]
+    }
+
+
 if __name__ == "__main__":
-    # Test
-    res = run_wfa_simulation()
+    import sys
+    
+    if len(sys.argv) > 1 and sys.argv[1] == "--cheatsheet":
+        # Generate backtest cheatsheet
+        res = generate_backtest_cheatsheet()
+    else:
+        # Default: run WFA simulation
+        res = run_wfa_simulation()
+    
     print(json.dumps(res, indent=2, default=str))
 

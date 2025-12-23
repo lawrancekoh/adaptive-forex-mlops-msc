@@ -18,7 +18,7 @@ RUN apt-get update \
 COPY src/ ./src/
 COPY config/ ./config/
 
-# Command to run the ZMQ Inference Server when the container starts
-# This exposes the ZMQ port 5555
-EXPOSE 5555
-CMD ["python", "src/inference_server.py"]
+# Command to run the FastAPI Inference Server when the container starts
+# Expose port 8000 for HTTP API
+EXPOSE 8000
+CMD ["uvicorn", "src.inference_server:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,43 +1,76 @@
 //+------------------------------------------------------------------+
 //|                                            AdaptiveManager.mqh   |
 //|                                                     LAWRANCE KOH |
-//|                 Manages Adaptive Parameter Updates from ML Server|
+//|         Manages Adaptive Parameter Updates from ML Server / CSV  |
 //+------------------------------------------------------------------+
 //| PURPOSE:                                                         |
-//|   Orchestrates the connection between ZMQClient and CSettings.   |
-//|   Updates DCA multipliers based on ML-predicted market regime.   |
+//|   Provides regime-based DCA parameters using:                    |
+//|   - HTTP WebRequest to FastAPI server (Live/Demo mode)           |
+//|   - CSV file lookup (Strategy Tester mode)                       |
+//|                                                                  |
+//| Note: WebRequest does NOT work in Strategy Tester, so we use a   |
+//| pre-generated CSV cheatsheet for backtesting.                    |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, LAWRANCE KOH"
 #property link      "lawrancekoh@outlook.com"
-#property version   "1.00"
+#property version   "2.00"
 
-#include <FXATM/Managers/ZMQClient.mqh>
 #include <FXATM/Managers/Settings.mqh>
 
 //+------------------------------------------------------------------+
-//| Global Adaptive Manager Instance                                  |
+//| Regime Row Structure (for CSV data)                               |
+//+------------------------------------------------------------------+
+struct RegimeRow
+{
+    datetime    time;       // Bar timestamp
+    int         id;         // Regime ID (0-3)
+    double      dist;       // Distance multiplier
+    double      lot;        // Lot multiplier
+};
+
+//+------------------------------------------------------------------+
+//| Adaptive Parameters Structure                                     |
+//+------------------------------------------------------------------+
+struct AdaptiveParams
+{
+    int     regime_id;              // Current market regime (0-3)
+    string  regime_label;           // Human-readable label
+    double  distance_multiplier;    // DCA distance multiplier
+    double  lot_multiplier;         // DCA lot multiplier
+    bool    is_valid;               // Whether params were successfully retrieved
+    string  error_message;          // Error message if any
+};
+
+//+------------------------------------------------------------------+
+//| CAdaptiveManager Class                                            |
 //+------------------------------------------------------------------+
 class CAdaptiveManager
 {
 private:
-    CZMQClient      m_zmq_client;
     bool            m_is_enabled;
-    int             m_update_frequency_bars;    // How often to request update
+    bool            m_is_testing;           // True if running in Strategy Tester
+    int             m_update_frequency_bars;
     int             m_bars_since_update;
     int             m_last_regime_id;
-    string          m_server_address;
+    string          m_api_url;              // FastAPI URL for live mode
+    string          m_csv_file;             // CSV file for backtest mode
     
-    // Feature calculation (simplified - real implementation would use full ATR/ADX)
-    double          CalculateHurst();
-    double          CalculateATR(int period = 14);
-    double          CalculateADX(int period = 14);
+    // Backtest data storage
+    RegimeRow       m_history[];            // Sorted array of regime rows
+    int             m_history_count;        // Number of loaded rows
+    
+    // Private methods
+    bool            LoadBacktestData();
+    AdaptiveParams  GetParamsFromCSV(datetime current_time);
+    AdaptiveParams  GetParamsFromAPI();
+    int             BinarySearchTime(datetime target);
     
 public:
                     CAdaptiveManager();
                    ~CAdaptiveManager();
     
     // Lifecycle
-    bool            Initialize(bool enabled = true, string server = "tcp://localhost:5555", int update_freq = 4);
+    bool            Initialize(bool enabled, string api_url, string csv_file, int update_freq = 4);
     void            Shutdown();
     
     // Core method - call on each new bar
@@ -47,6 +80,8 @@ public:
     void            ForceUpdate();
     int             GetCurrentRegime() { return m_last_regime_id; }
     bool            IsEnabled() { return m_is_enabled; }
+    double          GetDistanceMultiplier() { return CSettings::DcaStepMultiplier; }
+    double          GetLotMultiplier() { return CSettings::DcaLotMultiplier; }
 };
 
 //+------------------------------------------------------------------+
@@ -55,10 +90,13 @@ public:
 CAdaptiveManager::CAdaptiveManager()
 {
     m_is_enabled = false;
-    m_update_frequency_bars = 4;  // Update every 4 bars (1 hour on M15)
+    m_is_testing = false;
+    m_update_frequency_bars = 4;
     m_bars_since_update = 0;
     m_last_regime_id = 0;
-    m_server_address = "tcp://localhost:5555";
+    m_api_url = "http://localhost:8000/predict";
+    m_csv_file = "backtest_cheatsheet.csv";
+    m_history_count = 0;
 }
 
 //+------------------------------------------------------------------+
@@ -72,11 +110,13 @@ CAdaptiveManager::~CAdaptiveManager()
 //+------------------------------------------------------------------+
 //| Initialize the adaptive manager                                   |
 //+------------------------------------------------------------------+
-bool CAdaptiveManager::Initialize(bool enabled = true, string server = "tcp://localhost:5555", int update_freq = 4)
+bool CAdaptiveManager::Initialize(bool enabled, string api_url, string csv_file, int update_freq = 4)
 {
     m_is_enabled = enabled;
+    m_api_url = api_url;
+    m_csv_file = csv_file;
     m_update_frequency_bars = update_freq;
-    m_server_address = server;
+    m_is_testing = (bool)MQLInfoInteger(MQL_TESTER);
     
     if(!m_is_enabled)
     {
@@ -84,14 +124,24 @@ bool CAdaptiveManager::Initialize(bool enabled = true, string server = "tcp://lo
         return true;
     }
     
-    if(!m_zmq_client.Initialize(m_server_address))
+    if(m_is_testing)
     {
-        Print("[AdaptiveManager] Failed to connect to ML server");
-        m_is_enabled = false;
-        return false;
+        // Strategy Tester mode: Load CSV cheatsheet
+        Print("[AdaptiveManager] Strategy Tester detected - loading CSV cheatsheet");
+        if(!LoadBacktestData())
+        {
+            Print("[AdaptiveManager] Failed to load backtest CSV. Using static parameters.");
+            m_is_enabled = false;
+            return false;
+        }
+        Print("[AdaptiveManager] Initialized in BACKTEST mode with ", m_history_count, " rows");
     }
-    
-    Print("[AdaptiveManager] Initialized - connected to ", m_server_address);
+    else
+    {
+        // Live/Demo mode: Will use WebRequest
+        Print("[AdaptiveManager] Live/Demo mode - will use API at ", m_api_url);
+        Print("[AdaptiveManager] NOTE: Ensure URL is allowed in Tools > Options > Expert Advisors");
+    }
     
     // Get initial parameters
     ForceUpdate();
@@ -104,8 +154,245 @@ bool CAdaptiveManager::Initialize(bool enabled = true, string server = "tcp://lo
 //+------------------------------------------------------------------+
 void CAdaptiveManager::Shutdown()
 {
-    m_zmq_client.Shutdown();
+    ArrayFree(m_history);
+    m_history_count = 0;
     m_is_enabled = false;
+}
+
+//+------------------------------------------------------------------+
+//| Load backtest data from CSV file                                  |
+//+------------------------------------------------------------------+
+bool CAdaptiveManager::LoadBacktestData()
+{
+    // Open CSV file from MQL5/Files directory
+    int file_handle = FileOpen(m_csv_file, FILE_READ | FILE_CSV | FILE_ANSI, ',');
+    
+    if(file_handle == INVALID_HANDLE)
+    {
+        Print("[AdaptiveManager] Cannot open file: ", m_csv_file, " Error: ", GetLastError());
+        return false;
+    }
+    
+    // Skip header line
+    string header_line = "";
+    if(!FileIsEnding(file_handle))
+    {
+        // Read header (Time,RegimeID,DistMult,LotMult)
+        FileReadString(file_handle);  // Time
+        FileReadString(file_handle);  // RegimeID
+        FileReadString(file_handle);  // DistMult
+        FileReadString(file_handle);  // LotMult
+    }
+    
+    // Read data rows
+    int count = 0;
+    int array_size = 100000;  // Pre-allocate for ~4 years of M15 data
+    ArrayResize(m_history, array_size);
+    
+    while(!FileIsEnding(file_handle) && count < array_size)
+    {
+        long epoch = StringToInteger(FileReadString(file_handle));
+        if(epoch == 0) continue;  // Skip invalid rows
+        
+        m_history[count].time = (datetime)epoch;
+        m_history[count].id = (int)StringToInteger(FileReadString(file_handle));
+        m_history[count].dist = StringToDouble(FileReadString(file_handle));
+        m_history[count].lot = StringToDouble(FileReadString(file_handle));
+        
+        count++;
+    }
+    
+    FileClose(file_handle);
+    
+    // Resize to actual count
+    ArrayResize(m_history, count);
+    m_history_count = count;
+    
+    if(m_history_count > 0)
+    {
+        Print("[AdaptiveManager] Loaded ", m_history_count, " rows from ", m_csv_file);
+        Print("[AdaptiveManager] Time range: ", m_history[0].time, " to ", m_history[m_history_count-1].time);
+        return true;
+    }
+    
+    Print("[AdaptiveManager] No valid data found in ", m_csv_file);
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Binary search for closest time in sorted array                    |
+//+------------------------------------------------------------------+
+int CAdaptiveManager::BinarySearchTime(datetime target)
+{
+    if(m_history_count == 0)
+        return -1;
+    
+    int left = 0;
+    int right = m_history_count - 1;
+    int result = 0;  // Default to first row
+    
+    while(left <= right)
+    {
+        int mid = (left + right) / 2;
+        
+        if(m_history[mid].time <= target)
+        {
+            result = mid;  // This is a valid candidate
+            left = mid + 1;
+        }
+        else
+        {
+            right = mid - 1;
+        }
+    }
+    
+    return result;
+}
+
+//+------------------------------------------------------------------+
+//| Get parameters from CSV (backtest mode)                           |
+//+------------------------------------------------------------------+
+AdaptiveParams CAdaptiveManager::GetParamsFromCSV(datetime current_time)
+{
+    AdaptiveParams params;
+    params.is_valid = false;
+    params.regime_id = 0;
+    params.distance_multiplier = 1.5;
+    params.lot_multiplier = 1.2;
+    params.regime_label = "Default";
+    
+    int idx = BinarySearchTime(current_time);
+    
+    if(idx >= 0 && idx < m_history_count)
+    {
+        params.regime_id = m_history[idx].id;
+        params.distance_multiplier = m_history[idx].dist;
+        params.lot_multiplier = m_history[idx].lot;
+        params.is_valid = true;
+        
+        // Set label based on regime ID
+        switch(params.regime_id)
+        {
+            case 0: params.regime_label = "Trending"; break;
+            case 1: params.regime_label = "Strong Trend"; break;
+            case 2: params.regime_label = "Choppy"; break;
+            case 3: params.regime_label = "Ranging"; break;
+            default: params.regime_label = "Unknown"; break;
+        }
+    }
+    else
+    {
+        params.error_message = "Time not found in cheatsheet";
+    }
+    
+    return params;
+}
+
+//+------------------------------------------------------------------+
+//| Get parameters from API (live mode)                               |
+//+------------------------------------------------------------------+
+AdaptiveParams CAdaptiveManager::GetParamsFromAPI()
+{
+    AdaptiveParams params;
+    params.is_valid = false;
+    params.regime_id = 0;
+    params.distance_multiplier = 1.5;
+    params.lot_multiplier = 1.2;
+    params.regime_label = "Default";
+    
+    // Build JSON request body
+    string json_request = StringFormat(
+        "{\"action\":\"GET_PARAMS\",\"symbol\":\"%s\",\"magic\":%d}",
+        _Symbol, CSettings::EaMagicNumber
+    );
+    
+    // Prepare WebRequest parameters
+    char post_data[];
+    char result_data[];
+    string result_headers;
+    
+    StringToCharArray(json_request, post_data, 0, StringLen(json_request));
+    ArrayResize(post_data, StringLen(json_request));  // Remove null terminator
+    
+    string headers = "Content-Type: application/json\r\n";
+    
+    // Make HTTP POST request
+    int timeout = 5000;  // 5 second timeout
+    int response_code = WebRequest(
+        "POST",
+        m_api_url,
+        headers,
+        timeout,
+        post_data,
+        result_data,
+        result_headers
+    );
+    
+    if(response_code == -1)
+    {
+        int error = GetLastError();
+        params.error_message = StringFormat("WebRequest failed. Error %d. Add URL to allowed list.", error);
+        Print("[AdaptiveManager] ", params.error_message);
+        return params;
+    }
+    
+    if(response_code != 200)
+    {
+        params.error_message = StringFormat("HTTP Error %d", response_code);
+        Print("[AdaptiveManager] ", params.error_message);
+        return params;
+    }
+    
+    // Parse JSON response
+    string response = CharArrayToString(result_data);
+    
+    // Simple JSON parsing (look for key fields)
+    if(StringFind(response, "\"status\":\"OK\"") >= 0 || StringFind(response, "\"status\": \"OK\"") >= 0)
+    {
+        // Extract regime_id
+        int pos = StringFind(response, "\"regime_id\":");
+        if(pos >= 0)
+        {
+            string sub = StringSubstr(response, pos + 12, 10);
+            params.regime_id = (int)StringToInteger(sub);
+        }
+        
+        // Extract distance_multiplier
+        pos = StringFind(response, "\"distance_multiplier\":");
+        if(pos >= 0)
+        {
+            string sub = StringSubstr(response, pos + 22, 10);
+            params.distance_multiplier = StringToDouble(sub);
+        }
+        
+        // Extract lot_multiplier
+        pos = StringFind(response, "\"lot_multiplier\":");
+        if(pos >= 0)
+        {
+            string sub = StringSubstr(response, pos + 17, 10);
+            params.lot_multiplier = StringToDouble(sub);
+        }
+        
+        // Extract regime_label
+        pos = StringFind(response, "\"regime_label\":\"");
+        if(pos >= 0)
+        {
+            int end_pos = StringFind(response, "\"", pos + 16);
+            if(end_pos > pos + 16)
+            {
+                params.regime_label = StringSubstr(response, pos + 16, end_pos - pos - 16);
+            }
+        }
+        
+        params.is_valid = true;
+    }
+    else
+    {
+        params.error_message = "Invalid response from API: " + StringSubstr(response, 0, 100);
+        Print("[AdaptiveManager] ", params.error_message);
+    }
+    
+    return params;
 }
 
 //+------------------------------------------------------------------+
@@ -130,23 +417,28 @@ void CAdaptiveManager::OnNewBar()
 //+------------------------------------------------------------------+
 void CAdaptiveManager::ForceUpdate()
 {
-    if(!m_is_enabled || !m_zmq_client.IsConnected())
+    if(!m_is_enabled)
         return;
     
-    // Calculate current market features
-    double hurst = CalculateHurst();
-    double atr = CalculateATR(14);
-    double adx = CalculateADX(14);
+    AdaptiveParams params;
     
-    // Request adaptive parameters from Python server
-    AdaptiveParams params = m_zmq_client.GetAdaptiveParams(_Symbol, hurst, atr, adx);
+    if(m_is_testing)
+    {
+        // Backtest mode: Get from CSV
+        datetime current_time = iTime(_Symbol, PERIOD_M15, 0);
+        params = GetParamsFromCSV(current_time);
+    }
+    else
+    {
+        // Live mode: Get from API
+        params = GetParamsFromAPI();
+    }
     
     if(params.is_valid)
     {
         m_last_regime_id = params.regime_id;
         
         // Update CSettings with new multipliers
-        // These are used by DCAManager for lot sizing and step calculation
         CSettings::DcaStepMultiplier = params.distance_multiplier;
         CSettings::DcaLotMultiplier = params.lot_multiplier;
         
@@ -159,85 +451,6 @@ void CAdaptiveManager::ForceUpdate()
     {
         Print("[AdaptiveManager] Failed to get params: ", params.error_message);
     }
-}
-
-//+------------------------------------------------------------------+
-//| Simplified Hurst calculation (placeholder)                        |
-//| Real implementation would use the full R/S method                 |
-//+------------------------------------------------------------------+
-double CAdaptiveManager::CalculateHurst()
-{
-    // Placeholder: Return a middle value
-    // In production, this would calculate H from price data
-    // Or better: the Python server can calculate from sent OHLC data
-    
-    // Simple proxy: Use recent price volatility as a rough estimate
-    double prices[];
-    ArraySetAsSeries(prices, true);
-    CopyClose(_Symbol, PERIOD_M15, 0, 100, prices);
-    
-    if(ArraySize(prices) < 100)
-        return 0.5;
-    
-    // Very rough approximation based on price direction consistency
-    int up_count = 0;
-    for(int i = 1; i < 100; i++)
-    {
-        if(prices[i-1] > prices[i])
-            up_count++;
-    }
-    
-    // If mostly in one direction, H > 0.5 (trending)
-    // If balanced, H ~ 0.5 (random)
-    double ratio = (double)up_count / 99.0;
-    double hurst = 0.5 + MathAbs(ratio - 0.5);  // 0.5 to 1.0
-    
-    return hurst;
-}
-
-//+------------------------------------------------------------------+
-//| Calculate ATR (normalized)                                        |
-//+------------------------------------------------------------------+
-double CAdaptiveManager::CalculateATR(int period = 14)
-{
-    int atr_handle = iATR(_Symbol, PERIOD_M15, period);
-    if(atr_handle == INVALID_HANDLE)
-        return 0.001;
-    
-    double atr_buffer[];
-    ArraySetAsSeries(atr_buffer, true);
-    CopyBuffer(atr_handle, 0, 0, 1, atr_buffer);
-    IndicatorRelease(atr_handle);
-    
-    if(ArraySize(atr_buffer) < 1)
-        return 0.001;
-    
-    // Normalize by current price
-    double close = iClose(_Symbol, PERIOD_M15, 0);
-    if(close > 0)
-        return atr_buffer[0] / close;
-    
-    return 0.001;
-}
-
-//+------------------------------------------------------------------+
-//| Calculate ADX                                                     |
-//+------------------------------------------------------------------+
-double CAdaptiveManager::CalculateADX(int period = 14)
-{
-    int adx_handle = iADX(_Symbol, PERIOD_M15, period);
-    if(adx_handle == INVALID_HANDLE)
-        return 25.0;
-    
-    double adx_buffer[];
-    ArraySetAsSeries(adx_buffer, true);
-    CopyBuffer(adx_handle, 0, 0, 1, adx_buffer);  // Main ADX line
-    IndicatorRelease(adx_handle);
-    
-    if(ArraySize(adx_buffer) < 1)
-        return 25.0;
-    
-    return adx_buffer[0];
 }
 
 //+------------------------------------------------------------------+

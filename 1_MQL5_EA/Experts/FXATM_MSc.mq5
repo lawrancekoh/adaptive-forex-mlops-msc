@@ -1,27 +1,27 @@
 //+------------------------------------------------------------------+
 //|                                                   FXATM_MSc.mq5  |
-//|                      FX Automated Trading Manager v4.0 (MSc)     |
+//|                      FX Automated Trading Manager v4.1 (MSc)     |
 //|                       Adaptive ML-Integrated Expert Advisor      |
 //|                                     Copyright 2025, LAWRANCE KOH |
 //|                                          lawrancekoh@outlook.com |
 //+------------------------------------------------------------------+
 //| PURPOSE:                                                         |
 //|   MSc Thesis version of FXATM with ML-driven adaptive parameters |
-//|   featuring Python ZMQ integration for regime-aware trading.     |
+//|   featuring HTTP API integration for regime-aware trading.       |
 //|                                                                  |
 //| KEY FEATURES:                                                    |
 //|   • All features from FXATM v4.0                                 |
-//|   • ML-based Market Regime Detection (via Python ZMQ)           |
+//|   • ML-based Market Regime Detection (via FastAPI Server)       |
 //|   • Adaptive DCA Step/Lot Multipliers                           |
-//|   • Real-time parameter updates from Inference Server           |
+//|   • Backtest Cheatsheet lookup for Strategy Tester mode         |
 //|                                                                  |
 //| REQUIREMENTS:                                                    |
 //|   • MetaTrader 5 build 3280+                                     |
-//|   • mql-zmq library installed                                   |
-//|   • Python Inference Server running on tcp://localhost:5555     |
-//|   • Allow DLL imports in MT5 settings                           |
+//|   • Allow WebRequest for API URL in MT5 settings (Live mode)    |
+//|   • backtest_cheatsheet.csv in Files folder (Strategy Tester)   |
 //|                                                                  |
 //| VERSION HISTORY:                                                 |
+//|   4.11 - Replaced ZMQ with FastAPI/WebRequest + CSV lookup      |
 //|   4.10 - MSc Thesis: Added Adaptive Manager integration         |
 //|   4.00 - ATR-based features (TSL, lot sizing)                    |
 //|   3.00 - Multi-signal system, advanced basket management         |
@@ -30,8 +30,8 @@
 //+------------------------------------------------------------------+
 #property copyright   "Copyright 2025, LAWRANCE KOH"
 #property link        "lawrancekoh@outlook.com"
-#property version     "4.10"
-#property description "FXATM v4.1 MSc - Adaptive ML-Integrated Expert Advisor"
+#property version     "4.11"
+#property description "FXATM v4.11 MSc - Adaptive ML-Integrated Expert Advisor"
 
 #include <FXATM/Managers/Settings.mqh>
 #include <FXATM/Managers/TradeManager.mqh>
@@ -77,27 +77,28 @@ input bool     InpAllowShortTrades = true;                             // Allow 
 // A2. ADAPTIVE ML SETTINGS (MSc Thesis Integration)
 input group "******** ADAPTIVE ML SETTINGS ********";
 input bool     InpAdaptiveEnabled = true;                              // Enable ML-driven adaptive parameters
-input string   InpAdaptiveServerAddress = "tcp://localhost:5555";      // Python Inference Server address
+input string   InpAdaptiveApiUrl = "http://localhost:8000/predict";    // FastAPI Server URL (for Live/Demo mode)
+input string   InpBacktestCsvFile = "backtest_cheatsheet.csv";         // CSV file for Strategy Tester mode
 input int      InpAdaptiveUpdateFrequency = 4;                         // Update frequency in bars (4 = hourly on M15)
 
 // B. POSITION MANAGEMENT SETTINGS
 input group "******** POSITION MANAGEMENT SETTINGS ********";
 input ENUM_LOT_SIZING_MODE InpLotSizingMode = MODE_FIXED_LOT;          // Lot sizing calculation method
-input double   InpLotFixed = 0.04;                                     // Lot size for Fixed Lot mode
+input double   InpLotFixed = 0.01;                                     // Lot size for Fixed Lot mode
 input double   InpLotsPerThousand = 0.01;                              // Lots per 1000 units of balance/equity
 input double   InpLotRiskPercent = 1.0;                                // Risk % for Balance/Equity modes
 input int      InpSlPips = 500;                                        // Initial SL pips (0 = no SL, disables risk modes)
-input int      InpInitialTpPips = 42;                                  // Initial TP in pips (0 = no TP)
+input int      InpInitialTpPips = 21;                                  // Initial TP in pips (0 = no TP)
 // Basket TP/SL moved here for complete position lifecycle management
-input int      InpBasketTpPips = 26;                                   // Basket TP in pips when basket has >1 position (0 = disabled)
+input int      InpBasketTpPips = 21;                                   // Basket TP in pips when basket has >1 position (0 = disabled)
 
 // C. LOSS MANAGEMENT SETTINGS
 input group "******** LOSS MANAGEMENT SETTINGS ********";
 input int      InpDcaMaxTrades = 10;                                   // Max number of DCA trades allowed (0 = disabled)
 input int      InpDcaTriggerPips = 21;                                 // Initial pips in drawdown to add first DCA trade
-input double   InpDcaStepMultiplier = 1.1;                             // Step multiplier for subsequent DCA trades
-input double   InpDcaLotMultiplier = 1.5;                              // Lot multiplier for next DCA trade
-input int      InpDcaLotMultiplierStart = 2;                           // Multiplier starts from this trade number (e.g., 3rd trade)
+input double   InpDcaStepMultiplier = 1.5;                             // Step multiplier for subsequent DCA trades
+input double   InpDcaLotMultiplier = 1.2;                              // Lot multiplier for next DCA trade
+input int      InpDcaLotMultiplierStart = 1;                           // Multiplier starts from this trade number (e.g., 3rd trade)
 
 // D. PROFIT MANAGEMENT SETTINGS
 input group "******** PROFIT MANAGEMENT SETTINGS ********";
@@ -125,14 +126,14 @@ input int      InpTslHiLoPeriod = 10;                                  // Period
 
 // E5. Stacking Settings
 // Stacking settings moved here as part of profit management
-input int      InpStackingMaxTrades = 3;                               // Max number of Stacking trades (0 = disabled)
+input int      InpStackingMaxTrades = 0;                               // Max number of Stacking trades (0 = disabled)
 input int      InpStackingTriggerPips = 50;                            // Fixed pips trigger for stacking trades
 input double   InpStackingLotSize = 0.01;                              // Lot size for stacking trades
 input ENUM_STACKING_LOT_MODE InpStackingLotMode = MODE_FIXED;          // Stacking lot sizing mode
 
 // E. ADVANCED EXIT SETTINGS
 input group "******** ADVANCED EXIT SETTINGS ********";
-input int      InpPartialTpTriggerPips = 13;                           // Pips in profit to trigger partial close (0 = disabled)
+input int      InpPartialTpTriggerPips = 0;                           // Pips in profit to trigger partial close (0 = disabled)
 input double   InpPartialTpClosePercent = 50.0;                        // Percentage of volume to close
 input bool     InpPartialTpSetBe = true;                               // Set remaining position to BE after partial close?
 
@@ -401,10 +402,10 @@ int OnInit()
     CSettings::IsBacktestMode = (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_OPTIMIZATION));
     Print("FXATM_MSc: Backtest mode detected: ", CSettings::IsBacktestMode);
 
-    //--- MSc: Initialize Adaptive Manager (connects to Python ML server)
-    if(!g_adaptive_manager.Initialize(InpAdaptiveEnabled, InpAdaptiveServerAddress, InpAdaptiveUpdateFrequency))
+    //--- MSc: Initialize Adaptive Manager (HTTP API for live, CSV for backtest)
+    if(!g_adaptive_manager.Initialize(InpAdaptiveEnabled, InpAdaptiveApiUrl, InpBacktestCsvFile, InpAdaptiveUpdateFrequency))
     {
-        Print("Warning: Adaptive Manager failed to connect. Using static DCA parameters.");
+        Print("Warning: Adaptive Manager failed to initialize. Using static DCA parameters.");
     }
 
     //--- Initialize managers (after CSettings is set)
