@@ -105,6 +105,8 @@ sequenceDiagram
 
 ### Section 5.1.2: Practical Implications
 **Update**: Briefly mention the advantage of the API approach (scalability) vs ZMQ.
+**Suggested Text**:
+> The transition from a ZeroMQ-based socket architecture to a **FastAPI REST API** significantly enhances the system's practical scalability and deployment flexibility. While ZeroMQ offers high performance for low-latency IPC, it introduces complexity in connection management and firewall configuration in distributed environments. Conversely, the RESTful approach leverages standard HTTP/1.1 protocols, making the inference server natively compatible with cloud-native infrastructure, load balancers, and standard web security practices. This shift ensures that the ML-driven trading engine can be easily decoupled from the execution terminal, allowing for centralized model management across multiple MT5 instances without the overhead of maintaining persistent, low-level socket state.
 
 ### Section 5.2.2: Practical Contributions
 **Update**: Add a point about the "Modernized Architecture".
