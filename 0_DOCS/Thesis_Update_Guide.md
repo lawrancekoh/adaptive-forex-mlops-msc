@@ -38,7 +38,7 @@ graph TD
 
 ### Section 4.1.2: Component Implementation Details
 **D. Inference Server (inference_server.py)**
-**Update**: Rewrite this subsection to describe the FastAPI server instead of a generic "ZeroMQ server".
+**Update**: Rewrite this subsection to describe the FastAPI server and add the sequence diagram.
 **Suggested Text**:
 > **D. Inference Server (inference_server.py)**
 > The real-time prediction engine is implemented as an asynchronous **FastAPI** application.
@@ -47,6 +47,31 @@ graph TD
 > * **Response Format**: JSON
 >
 > This replaces the complexity of maintaining low-level socket connections with a stateless, scalable HTTP service. The server utilizes `uvicorn` as the ASGI gateway, ensuring low-latency request handling suitable for the M15 trading timeframe.
+
+**Updated Implementation Flow**:
+```mermaid
+sequenceDiagram
+    participant MT5 as "FXATM_MSc (MT5)"
+    participant AM as "AdaptiveManager"
+    participant API as "FastAPI Server"
+    participant ML as "ML Core / GMM"
+    participant CSV as "Backtest Artifact (CSV)"
+
+    MT5->>AM: OnNewBar()
+    
+    alt Mode == "LIVE"
+        AM->>AM: Calculate Features (H, ATR, ADX)
+        AM->>API: HTTP GET /predict?features=...
+        API->>ML: predict(features)
+        ML-->>API: regime_id, params
+        API-->>AM: JSON {regime_id, params}
+    else Mode == "TESTER" (Backtest)
+        AM->>CSV: FileRead (Lookup by Timestamp)
+        CSV-->>AM: regime_id, params
+    end
+
+    AM->>MT5: Update CSettings (Multipliers)
+```
 
 ---
 
