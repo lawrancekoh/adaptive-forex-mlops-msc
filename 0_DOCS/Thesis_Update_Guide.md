@@ -12,20 +12,20 @@
 ```mermaid
 graph TD
     subgraph "Python Environment"
-        ML[ML Core / GMM Model]
-        API[FastAPI Server]
-        Gen[Artifact Generator]
+        ML["ML Core / GMM Model"]
+        API["FastAPI Server"]
+        Gen["Artifact Generator"]
         ML --> API
         ML --> Gen
     end
 
     subgraph "Artifacts"
-        CSV[Backtest Cheatsheet (.csv)]
+        CSV["Backtest Cheatsheet (.csv)"]
         Gen -->|Pre-compute| CSV
     end
 
     subgraph "MetaTrader 5 (MQL5)"
-        EA[Expert Advisor]
+        EA["Expert Advisor"]
         EA -->|Live: HTTP GET /predict| API
         EA -->|Backtest: File Read| CSV
     end
