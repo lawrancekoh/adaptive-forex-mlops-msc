@@ -112,3 +112,19 @@ sequenceDiagram
 **Update**: Add a point about the "Modernized Architecture".
 **Suggested Text**:
 > * **Modernized REST Architecture**: Demonstrating the viability of using standard web protocols (FastAPI) for algorithmic trading, moving away from legacy socket implementations and enabling cloud-native deployment patterns.
+
+### Section 4.5: System Monitoring & Dashboard (New Section)
+**Update**: Suggest adding a brief section to showcase the Streamlit interface.
+**Suggested Text**:
+> To provide real-time visibility into the training process and model health, a **Streamlit-based Monitoring Dashboard** was implemented. This interface (shown in Figure 4.X) visualizes the Gaussian Mixture Model (GMM) cluster distribution, feature importance, and rolling Walk-Forward Analysis (WFA) results. It serves as the primary administrative layer for the MLOps pipeline, enabling visual verification of regime persistence and generalization stability.
+
+**How to Insert into MSc_Thesis.md**:
+1. **Best Location**: Chapter 4, immediately after **Section 4.1.2** (Component Implementation) as a new summary of the UI, or within **Section 4.4** (System Validation Summary) to provide visual evidence of the metrics.
+2. **Markdown Syntax**:
+   ```markdown
+   ![Streamlit Monitoring Dashboard: Training Results](path/to/your/screenshot.png)
+   *Figure 4.X: Monitoring dashboard displaying GMM cluster centroids and WFA efficiency metrics.*
+   ```
+
+> [!TIP]
+> **Recommended Screenshot**: Capture the "Model Training" tab showing the Cluster Centroids table and the "WFA Results" tab showing the rolling Sharpe Ratio graph. This provides the strongest academic proof of your system's stability.
