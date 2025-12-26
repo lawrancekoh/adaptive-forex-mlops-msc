@@ -13,7 +13,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, LAWRANCE KOH"
 #property link      "lawrancekoh@outlook.com"
-#property version   "2.00"
+#property version   "3.00"
 
 #include <FXATM/Managers/Settings.mqh>
 
@@ -54,6 +54,7 @@ private:
     int             m_last_regime_id;
     string          m_api_url;              // FastAPI URL for live mode
     string          m_csv_file;             // CSV file for backtest mode
+    int             m_ohlc_lookback;        // Number of bars to send for live inference
     
     // Backtest data storage
     RegimeRow       m_history[];            // Sorted array of regime rows
@@ -64,6 +65,7 @@ private:
     AdaptiveParams  GetParamsFromCSV(datetime current_time);
     AdaptiveParams  GetParamsFromAPI();
     int             BinarySearchTime(datetime target);
+    string          BuildOHLCJson();        // New: Build JSON payload with OHLC data
     
 public:
                     CAdaptiveManager();
@@ -97,6 +99,7 @@ CAdaptiveManager::CAdaptiveManager()
     m_api_url = "http://localhost:8000/predict";
     m_csv_file = "backtest_cheatsheet.csv";
     m_history_count = 0;
+    m_ohlc_lookback = 300;  // 300 bars = 3 days of M15 data (enough for Hurst)
 }
 
 //+------------------------------------------------------------------+
@@ -138,8 +141,9 @@ bool CAdaptiveManager::Initialize(bool enabled, string api_url, string csv_file,
     }
     else
     {
-        // Live/Demo mode: Will use WebRequest
+        // Live/Demo mode: Will use WebRequest with OHLC data
         Print("[AdaptiveManager] Live/Demo mode - will use API at ", m_api_url);
+        Print("[AdaptiveManager] Will send ", m_ohlc_lookback, " bars of OHLC data for live inference");
         Print("[AdaptiveManager] NOTE: Ensure URL is allowed in Tools > Options > Expert Advisors");
     }
     
@@ -289,6 +293,50 @@ AdaptiveParams CAdaptiveManager::GetParamsFromCSV(datetime current_time)
 }
 
 //+------------------------------------------------------------------+
+//| Build JSON payload with OHLC data for live inference              |
+//+------------------------------------------------------------------+
+string CAdaptiveManager::BuildOHLCJson()
+{
+    // Copy recent M15 rates
+    MqlRates rates[];
+    int copied = CopyRates(_Symbol, PERIOD_M15, 0, m_ohlc_lookback, rates);
+    
+    if(copied < 150)
+    {
+        Print("[AdaptiveManager] Not enough bars for inference: ", copied);
+        // Return minimal request without OHLC data (will trigger fallback)
+        return StringFormat(
+            "{\"action\":\"GET_PARAMS\",\"symbol\":\"%s\",\"magic\":%d}",
+            _Symbol, CSettings::EaMagicNumber
+        );
+    }
+    
+    // Build JSON with OHLC data array
+    // Format: {"action":"GET_PARAMS","symbol":"EURUSD","magic":123456,"ohlc_data":[{...},{...},...]}
+    string json = StringFormat(
+        "{\"action\":\"GET_PARAMS\",\"symbol\":\"%s\",\"magic\":%d,\"ohlc_data\":[",
+        _Symbol, CSettings::EaMagicNumber
+    );
+    
+    for(int i = 0; i < copied; i++)
+    {
+        if(i > 0) json += ",";
+        json += StringFormat(
+            "{\"time\":%d,\"open\":%.5f,\"high\":%.5f,\"low\":%.5f,\"close\":%.5f}",
+            (long)rates[i].time,
+            rates[i].open,
+            rates[i].high,
+            rates[i].low,
+            rates[i].close
+        );
+    }
+    
+    json += "]}";
+    
+    return json;
+}
+
+//+------------------------------------------------------------------+
 //| Get parameters from API (live mode)                               |
 //+------------------------------------------------------------------+
 AdaptiveParams CAdaptiveManager::GetParamsFromAPI()
@@ -300,11 +348,8 @@ AdaptiveParams CAdaptiveManager::GetParamsFromAPI()
     params.lot_multiplier = 1.2;
     params.regime_label = "Default";
     
-    // Build JSON request body
-    string json_request = StringFormat(
-        "{\"action\":\"GET_PARAMS\",\"symbol\":\"%s\",\"magic\":%d}",
-        _Symbol, CSettings::EaMagicNumber
-    );
+    // Build JSON request body with OHLC data
+    string json_request = BuildOHLCJson();
     
     // Prepare WebRequest parameters
     char post_data[];
@@ -316,8 +361,8 @@ AdaptiveParams CAdaptiveManager::GetParamsFromAPI()
     
     string headers = "Content-Type: application/json\r\n";
     
-    // Make HTTP POST request
-    int timeout = 5000;  // 5 second timeout
+    // Make HTTP POST request (increased timeout for feature calculation)
+    int timeout = 10000;  // 10 second timeout (feature calc takes ~150ms + network)
     int response_code = WebRequest(
         "POST",
         m_api_url,
@@ -384,6 +429,17 @@ AdaptiveParams CAdaptiveManager::GetParamsFromAPI()
             }
         }
         
+        // Check inference mode
+        pos = StringFind(response, "\"inference_mode\":\"live\"");
+        if(pos >= 0)
+        {
+            Print("[AdaptiveManager] Live ML inference successful");
+        }
+        else
+        {
+            Print("[AdaptiveManager] Using fallback parameters (insufficient data or model error)");
+        }
+        
         params.is_valid = true;
     }
     else
@@ -430,7 +486,7 @@ void CAdaptiveManager::ForceUpdate()
     }
     else
     {
-        // Live mode: Get from API
+        // Live mode: Get from API with OHLC data
         params = GetParamsFromAPI();
     }
     
