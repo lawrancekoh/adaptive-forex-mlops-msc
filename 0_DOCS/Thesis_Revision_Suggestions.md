@@ -102,5 +102,6 @@ graph TD
         RS -->|Imports| FE
     end
 
-    AM -.->|HTTP POST<br/>(JSON OHLC)| IS
+    AM -.-> IS
+    linkStyle 2 stroke:#333,stroke-width:2px,label:"HTTP POST (JSON OHLC)";
 ```
